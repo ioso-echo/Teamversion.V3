@@ -91,8 +91,14 @@ def create_trip_dropdown(title: str = "Create new trip"):
             occasion = st.text_input("Occasion")
 
             conn = connect()
-            user_df = pd.read_sql_query("SELECT user_ID, username FROM users ORDER BY username", conn)
+            user_df = pd.read_sql_query("""SELECT u.user_ID, u.username FROM users u 
+                                        JOIN roles r ON u.role = r.role 
+                                        WHERE r.sortkey < 3
+                                        AND u.manager_ID = ? 
+                                        ORDER BY username""", conn, params=(int(st.session_state["user_ID"]),),
+            )
             conn.close()
+
 
             options = list(zip(user_df["user_ID"], user_df["username"]))
             selected = st.multiselect("Assign users", options=options, format_func=lambda x: x[1])
@@ -129,43 +135,7 @@ def del_trip_dropdown(title: str = "Delete trip"):
                         time.sleep(0.5)
                         st.rerun()
 
-def show_trip_table():
-    conn = connect()
-    df = pd.read_sql_query("SELECT * FROM trips", conn)
-    conn.close()
-    st.dataframe(df)
-
-#########################################
-def interactive_trip_table():
-    conn = connect()
-    trip_df = pd.read_sql_query("SELECT trip_ID, destination, start_date, end_date FROM trips ORDER BY start_date", conn)
-    conn.close()
-
-    options = [
-    (int(row.trip_ID), f"{row.trip_ID} – {row.destination} ({row.start_date} → {row.end_date})")
-    for _, row in trip_df.iterrows()
-    ]
-
-    selected = st.selectbox("Select a trip", options=options, format_func=lambda x: x[1])
-    trip_id = selected[0]
-
-    if selected:
-        conn = connect()
-        trip_detail = pd.read_sql_query("SELECT * FROM trips WHERE trip_ID = ?", conn, params=(trip_id,))
-        participants = pd.read_sql_query("""
-            SELECT u.username, u.email
-            FROM users u
-            JOIN user_trips ut ON ut.user_ID = u.user_ID
-            WHERE ut.trip_ID = ?
-            ORDER BY u.username
-        """, conn, params=(trip_id,))
-        conn.close()
-
-        st.subheader("Trip details")
-        st.dataframe(trip_detail)
-        st.subheader("Participants")
-        st.dataframe(participants)
-
+#trip table overview
 def trip_list_view():
     conn = connect()
     trip_df = pd.read_sql_query("""
@@ -179,18 +149,18 @@ def trip_list_view():
         st.info("No trips available.")
         return
 
-    # Schleife über alle Trips
+    #loop all trips
     for _, row in trip_df.iterrows():
         with st.expander(
-            f"#{row.trip_ID} — {row.destination} ({row.start_date} → {row.end_date})",
+            f"{row.trip_ID} — {row.destination} ({row.start_date} → {row.end_date})",
             expanded=False
         ):
-            # Trip-Details anzeigen
+            #list details
             st.write("**Occasion:**", row.occasion)
             st.write("**Start:**", row.start_date)
             st.write("**End:**", row.end_date)
 
-            # Teilnehmende laden
+            #load participants into table
             conn = connect()
             participants = pd.read_sql_query("""
                 SELECT u.username, u.email
@@ -204,7 +174,7 @@ def trip_list_view():
             st.markdown("**Participants:**")
             st.dataframe(participants, hide_index=True, use_container_width=True)
 
-            # Optional: ein kleines Formular im Expander
+            #edit occasion
             with st.form(f"edit_trip_{row.trip_ID}"):
                 new_occasion = st.text_input("Edit occasion", value=row.occasion)
                 submitted = st.form_submit_button("Save changes")
@@ -216,28 +186,35 @@ def trip_list_view():
                     )
                     conn.commit()
                     conn.close()
-                    st.success("Trip updated!")
+                    st.success("Occasion updated!")
+                    time.sleep(0.5)
                     st.rerun()
             
             with st.form(f"edit_participants_{row.trip_ID}"):
                 st.write("Manage participants")
 
-                # 1️⃣ Alle User aus DB holen (für Auswahl)
+                #load participants to edit them
                 conn = connect()
-                all_users_df = pd.read_sql_query("SELECT user_ID, username FROM users ORDER BY username", conn)
+                all_users_df = pd.read_sql_query("""SELECT u.user_ID, u.username FROM users u 
+                    WHERE u.manager_ID = ? 
+                    ORDER BY username
+                """, conn, params=(int(st.session_state["user_ID"]),),
+                )
                 conn.close()
 
-                # 2️⃣ Aktuelle Teilnehmer dieses Trips holen
+                #load current participants from db
                 conn = connect()
                 current_df = pd.read_sql_query("""
                     SELECT u.user_ID, u.username
                     FROM users u
                     JOIN user_trips ut ON ut.user_ID = u.user_ID
                     WHERE ut.trip_ID = ?
-                """, conn, params=(row.trip_ID,))
+                    AND u.manager_ID = ?
+                """, conn, params=(row.trip_ID, int(st.session_state["user_ID"]),), 
+                )
                 conn.close()
 
-                # 3️⃣ Multiselect mit allen Usern, vorausgewählt = aktuelle Teilnehmer
+                #multiselect to choose from
                 selected_users = st.multiselect(
                     "Select participants",
                     options=all_users_df["user_ID"].tolist(),
@@ -245,17 +222,17 @@ def trip_list_view():
                     format_func=lambda uid: all_users_df.loc[all_users_df["user_ID"] == uid, "username"].values[0]
                 )
 
-                # 4️⃣ Submit-Button
+                #submit button
                 update_participants = st.form_submit_button("Update participants")
 
                 if update_participants:
                     conn = connect()
                     c = conn.cursor()
 
-                    # Bestehende Zuordnungen löschen
+                    #delete old connection
                     c.execute("DELETE FROM user_trips WHERE trip_ID = ?", (row.trip_ID,))
 
-                    # Neue Zuordnungen einfügen
+                    #create new connection
                     user_trips_list = [(row.trip_ID, uid) for uid in selected_users]
                     c.executemany(
                         "INSERT OR IGNORE INTO user_trips (trip_ID, user_ID) VALUES (?, ?)",
@@ -265,25 +242,5 @@ def trip_list_view():
                     conn.commit()
                     conn.close()
                     st.success("Participants updated!")
+                    time.sleep(0.5)
                     st.rerun()
-
-### Get trips for a specific user ###
-
-def get_user_trips(user_id: int):
-    conn = connect()
-    query = """
-    SELECT t.trip_ID,
-           t.destination,
-           t.start_date,
-           t.end_date,
-           t.occasion
-    FROM trips t
-    JOIN user_trips ut ON t.trip_ID = ut.trip_ID
-    WHERE ut.user_ID = ?
-    ORDER BY t.start_date
-    """
-    df = pd.read_sql_query(query, conn, params=(user_id,))
-    conn.close()
-    return df
-
-
