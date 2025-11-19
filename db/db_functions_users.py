@@ -20,6 +20,7 @@ def create_tables():
         password TEXT NOT NULL,
         email TEXT,
         role TEXT NOT NULL,
+        manager_ID INTEGER,
         FOREIGN KEY (role) REFERENCES roles (role)
     )
     """)
@@ -43,14 +44,37 @@ def create_tables():
     conn.commit()
     conn.close()
 
+### we use user_ID of the manager, to add their user_ID to the users they create with another column manager_id, so manager only have access to these users, they've created ###
+def get_user_ID(username: str):
+    conn = connect()
+    c = conn.cursor()
+
+    c.execute("SELECT user_ID FROM users WHERE username = ?", (username,))
+    row = c.fetchone()
+
+    conn.close()
+
+    if row:
+        return row[0]
+    return None
+
+def get_manager_ID(username: str):
+    conn = connect()
+    c = conn.cursor()
+    c.execute("SELECT manager_ID FROM users WHERE username = ?", (username,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
 ### Adding users ###
 def add_user(username, password, email, role):
     conn = connect()
     c = conn.cursor()
+    manager_ID = st.session_state.get("user_ID", None)
     try:
         c.execute(
-            "INSERT INTO users (username, password, email, role) VALUES (?, ?, ?, ?)",
-            (username, password, email, role)
+            "INSERT INTO users (username, password, email, role, manager_ID) VALUES (?, ?, ?, ?, ?)",
+            (username, password, email, role, manager_ID)
         )
         conn.commit()
         print(f"✅ User '{username}' sucessfully added!")
@@ -97,7 +121,26 @@ def list_roles_editable():
     conn.close()
     return roles
 
-### Dropdown for admin/manager page to register someone ###
+### returns all users which the manager has created ###
+def get_users_for_current_manager():
+    if "user_ID" not in st.session_state:
+        return []
+
+    manager_id = st.session_state["user_ID"]
+
+    conn = connect()
+    c = conn.cursor()
+    c.execute("""
+        SELECT user_ID, username, email, role
+        FROM users
+        WHERE manager_ID = ?
+        ORDER BY username
+    """, (manager_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+### Dropdown for manager page to register someone ###
 def register_user_dropdown(title: str = "Register new user"):
     if "role_sortkey" not in st.session_state:
         st.warning("You're not authorized to add new users")
@@ -140,9 +183,52 @@ def register_user_dropdown(title: str = "Register new user"):
             except Exception as e:
                 st.error(f"Unexpected Error: {e}")
 
+### Dropdown for admin page to register someone ###
+def register_user_dropdown_admin(title: str = "Register new user"):
+    if "role_sortkey" not in st.session_state:
+        st.warning("You're not authorized to add new users")
+        return
+
+    roles = list_roles_editable()
+    role_names = [r[0] for r in roles]
+
+    with st.expander(title, expanded=False):
+        with st.form("register_user_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                username = st.text_input("Username")
+                email    = st.text_input("E-mail")
+                manager_ID = st.text_input("Manager ID")
+            with col2:
+                password  = st.text_input("Password", type="password")
+                password2 = st.text_input("Confirm password", type="password")
+                role      = st.selectbox("Rolle", role_names if role_names else ["— no available role —"])
+
+            submitted = st.form_submit_button("Register")
+
+        if submitted:
+            if not username or not password:
+                st.warning("Please enter username and password")
+                return
+            if password != password2:
+                st.error("Passwords aren't identical")
+                return
+            if not role_names or role not in role_names:
+                st.error("You're not allowed to add this role")
+                return
+
+            try:
+                add_user(username, password, email, role)
+                st.success(f"User **{username}** was registered")
+                time.sleep(2)
+                st.rerun()
+            except sqlite3.IntegrityError as e:
+                st.error(f"Registration failed (maybe already exists): {e}")
+            except Exception as e:
+                st.error(f"Unexpected Error: {e}")
 
 
-### Dropdown for admin/manager page to delete someone ###
+### Dropdown for manager page to delete someone ###
 def del_user_dropdown(title: str = "Delete user"):
     if "role_sortkey" not in st.session_state:
         st.warning("You're not authorized to delete users.")
@@ -156,7 +242,47 @@ def del_user_dropdown(title: str = "Delete user"):
         SELECT u.username, u.role
         FROM users u
         JOIN roles r ON u.role = r.role
-        WHERE r.sortkey < ?
+        WHERE r.sortkey < ? 
+        AND u.manager_ID = ?
+        ORDER BY r.sortkey DESC
+    """, (current_sortkey, st.session_state["user_ID"]))
+    users = c.fetchall()
+    conn.close()
+
+    if not users:
+        st.info("No deletable users available.")
+        return
+
+    with st.expander(title, expanded=False):
+        user_list = [f"{u[0]}  ·  {u[1]}" for u in users]
+        selected_user = st.selectbox("Select user to delete", user_list)
+
+        if st.button("Delete user"):
+            username = selected_user.split("·")[0].strip()
+            conn = sqlite3.connect(DB_USERS)
+            c = conn.cursor()
+            c.execute("DELETE FROM users WHERE username = ?", (username,))
+            conn.commit()
+            conn.close()
+            st.success(f"✅ User '{username}' has been deleted.")
+            time.sleep(2)
+            st.rerun()
+
+### Dropdown for Admin page to delete someone ###
+def del_user_dropdown_admin(title: str = "Delete user"):
+    if "role_sortkey" not in st.session_state:
+        st.warning("You're not authorized to delete users.")
+        return
+
+    current_sortkey = st.session_state["role_sortkey"]
+    conn = sqlite3.connect(DB_USERS)
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT u.username, u.role
+        FROM users u
+        JOIN roles r ON u.role = r.role
+        WHERE r.sortkey < ? 
         ORDER BY r.sortkey DESC
     """, (current_sortkey,))
     users = c.fetchall()
@@ -181,7 +307,7 @@ def del_user_dropdown(title: str = "Delete user"):
             time.sleep(2)
             st.rerun()
 
-### Dropdown for admin/manager page to edit existing person ###
+### Dropdown for manager page to edit existing person ###
 def edit_user_dropdown(title: str = "Edit user"):
     if "role_sortkey" not in st.session_state:
         st.warning("You're not authorized to edit users.")
@@ -196,9 +322,10 @@ def edit_user_dropdown(title: str = "Edit user"):
         SELECT u.username, u.email, u.password, u.role
         FROM users u
         JOIN roles r ON u.role = r.role
-        WHERE r.sortkey < ?
+        WHERE r.sortkey < ? 
+        AND u.manager_ID = ?
         ORDER BY r.sortkey DESC
-    """, (current_sortkey,))
+    """, (current_sortkey, st.session_state["user_ID"]))
     users = c.fetchall()
     conn.close()
 
@@ -248,6 +375,84 @@ def edit_user_dropdown(title: str = "Edit user"):
             time.sleep (2)
             st.rerun()
 
+### Dropdown for Admin page to edit existing person ###
+def edit_user_dropdown_admin(title: str = "Edit user"):
+    if "role_sortkey" not in st.session_state:
+        st.warning("You're not authorized to edit users.")
+        return
+
+    current_sortkey = st.session_state["role_sortkey"]
+
+    conn = sqlite3.connect(DB_USERS)
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT u.username, u.email, u.password, u.role, u.manager_ID
+        FROM users u
+        JOIN roles r ON u.role = r.role
+        WHERE r.sortkey < ?
+        ORDER BY r.sortkey DESC
+    """, (current_sortkey,))
+    users = c.fetchall()
+    conn.close()
+
+    if not users:
+        st.info("No editable users available.")
+        return
+
+    with st.expander(title, expanded=False):
+        user_list = [u[0] for u in users]
+        selected_user = st.selectbox("Select user to edit", user_list)
+
+        conn = sqlite3.connect(DB_USERS)
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT username, password, email, role, manager_ID
+            FROM users
+            WHERE username = ?
+        """, (selected_user,))
+        user_data = c.fetchone()
+        conn.close()
+
+        if not user_data:
+            st.warning("User not found.")
+            return
+
+        username, password, email, role, manager_ID = user_data
+
+        with st.form("edit_user_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                new_username   = st.text_input("Username", value=username)
+                new_email      = st.text_input("E-Mail", value=email)
+                new_manager_ID = st.text_input("Manager ID", value=str(manager_ID))
+            with col2:
+                new_password = st.text_input("Password", value=password, type="password")
+                new_role     = st.text_input("Role", value=role)
+
+            submitted = st.form_submit_button("Save changes")
+
+        if submitted:
+            conn = sqlite3.connect(DB_USERS)
+            c = conn.cursor()
+
+            c.execute("""
+                UPDATE users
+                SET username = ?, password = ?, email = ?, role = ?, manager_ID = ?
+                WHERE username = ?
+            """, (
+                new_username, new_password, new_email,
+                new_role, new_manager_ID, username
+            ))
+
+            conn.commit()
+            conn.close()
+
+            st.success(f"✅ User '{username}' updated successfully.")
+            time.sleep(1.5)
+            st.rerun()
+
 ### Dropdown for main page to register as manager ###
 def register_main(title: str = "Register as manager"):
     with st.expander(title, expanded=False):
@@ -269,24 +474,36 @@ def register_main(title: str = "Register as manager"):
             if password != password2:
                 st.error("Passwords aren't identical.")
                 return
+
             role = "Manager"
 
             try:
                 conn = sqlite3.connect(DB_USERS)
                 c = conn.cursor()
+
                 c.execute(
                     "INSERT INTO users (username, password, email, role) VALUES (?, ?, ?, ?)",
                     (username, password, email, role)
                 )
                 conn.commit()
+
+                c.execute("SELECT user_ID FROM users WHERE username = ?", (username,))
+                new_user_id = c.fetchone()[0]
+
+                c.execute(
+                    "UPDATE users SET manager_ID = ? WHERE user_ID = ?",
+                    (new_user_id, new_user_id)
+                )
+                conn.commit()
+
                 conn.close()
 
-                st.success(f"✅ Manager '{username}' was succesfully added, you are able to log in now.")
+                st.success(f"✅ Manager '{username}' was successfully added. You can now log in.")
                 time.sleep(2)
                 st.rerun()
 
             except sqlite3.IntegrityError:
-                st.error("⚠️ Manager exists already")
+                st.error("⚠️ Manager already exists.")
             except Exception as e:
                 st.error(f"Unexpected error: {e}")
 
@@ -364,7 +581,7 @@ def get_users_under_me() -> pd.DataFrame | None:
     conn = sqlite3.connect(DB_USERS)
     c = conn.cursor()
     c.execute("""
-        SELECT u.username, u.email, u.role, r.sortkey
+        SELECT u.username, u.email, u.role, r.sortkey, u.manager_ID
         FROM users u
         JOIN roles r ON u.role = r.role
         WHERE r.sortkey < ?
@@ -373,4 +590,4 @@ def get_users_under_me() -> pd.DataFrame | None:
     rows = c.fetchall()
     conn.close()
 
-    return pd.DataFrame(rows, columns=["username", "email", "role", "sortkey"])
+    return pd.DataFrame(rows, columns=["username", "email", "role", "sortkey", "manager_ID"])
