@@ -1,4 +1,4 @@
 streamlit
-panday
+pandas
 numpy
 time
