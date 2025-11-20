@@ -26,6 +26,7 @@ if submitted:
     result = get_user_by_credentials(username, password)
     if result:
         uname, role = result
+        st.session_state["user_ID"] = user_id
         st.session_state["username"] = uname
         st.session_state["role"] = role
         role_sortkey = get_role_sortkey(role)
