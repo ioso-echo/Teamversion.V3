@@ -1,6 +1,6 @@
 import streamlit as st
 import time
-from db.db_functions_users import create_tables, add_user, get_user_by_credentials, get_role_sortkey, register_main
+from db.db_functions_users_KT import create_tables, add_user, get_user_by_credentials, get_role_sortkey, register_main
 
 ### basic page settings ###
 st.set_page_config(page_title="Login", layout="centered", initial_sidebar_state="collapsed")

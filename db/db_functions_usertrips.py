@@ -14,10 +14,10 @@ DB_PATH_USER_TRIPS = "db/user_trips.db"
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from db.db_functions_trips import get_user_trips, create_trip_table
-from db.db_functions_users import edit_own_profile
+from db.db_functions_users_KT import edit_own_profile
 
 import streamlit as st
-from db.db_functions_users import edit_own_profile
+from db.db_functions_users_KT import edit_own_profile
 st.set_page_config(page_title="User Dashboard", layout="wide")
 st.title("User Dashboard")
 
